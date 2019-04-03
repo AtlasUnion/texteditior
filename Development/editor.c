@@ -7,10 +7,12 @@
 #include <ctype.h>
 #include <errno.h>
 #include <sys/ioctl.h>
+#include <string.h>
 
 /*** defines ***/
 
 #define CTRL_KEY(k) ((k) & 0x1f) // mimic that ctrl strips bits 5 and 6
+#define ABUF_INIT {NULL,0}
 
 /*** data  ***/
 struct editorConfig {
@@ -21,6 +23,44 @@ struct editorConfig {
 
 struct editorConfig E;
 
+/*** append buffer ***/
+
+struct abuf{
+    char* b;
+    int len;
+};
+
+/**
+ * @brief 
+ * 
+ * @param ab: original string
+ * @param s: string to be appended
+ * @param len: length of the string to be appended
+ */
+void abAppend(struct abuf *ab, const char* s, int len) {
+    char* new = realloc(ab->b, ab->len + len);
+
+    if (new == NULL) return; 
+    memcpy(&new[ab->len], s, len);
+    ab->b = new;
+    ab->len += len;
+}
+
+/**
+ * @brief Free dynamic string
+ * 
+ * @param ab 
+ */
+void abFree(struct abuf* ab) {
+    free(ab->b);
+}
+
+/*** append buffer ***/
+
+struct abuf{
+    char* b;
+    int len;
+};
 /*** terminal ***/
 
 /**
@@ -93,6 +133,11 @@ void enableRawMode() {
         die("tcsetattr");
 }
 
+/**
+ * @brief Read a key press from user
+ * 
+ * @return char 
+ */
 char editorReadKey() {
     int nread;
     char c;
@@ -102,6 +147,13 @@ char editorReadKey() {
     return c;
 }
 
+/**
+ * @brief Get the Cursor Position
+ * 
+ * @param rows 
+ * @param cols 
+ * @return int 0 if no error, else -1
+ */
 int getCursorPosition(int* rows, int* cols) {
     char buf[32];
     unsigned int i = 0;
@@ -125,6 +177,13 @@ int getCursorPosition(int* rows, int* cols) {
     return 0;
 }
 
+/**
+ * @brief Get the Window Size
+ * 
+ * @param rows 
+ * @param cols 
+ * @return int 0 if no error, else -1
+ */
 int getWindowSize(int* rows, int* cols) {
     struct winsize ws;
     /*
@@ -141,33 +200,47 @@ int getWindowSize(int* rows, int* cols) {
     }
 }
 
+
 /*** output ***/
 
-void editorDrawRows() {
+void editorDrawRows(struct abuf* ab) {
     int y;
     for (y = 0; y < E.screenRows; y++) {
-        write(STDOUT_FILENO, "~\r\n", 3);
+        // write(STDOUT_FILENO, "~", 1);
+        abAppend(ab, "~", 1);
+        if (y < E.screenRows - 1) {
+            // write(STDOUT_FILENO, "\r\n", 2);
+            abAppend(ab, "\r\n", 2);
+        }
     }
 }
 
 void editorRefreshScreen() {
+    struct abuf ab = ABUF_INIT;
+
     /*
     ** \x1b escape character, followed by [ to instruct terminal to execute certain commands
     ** 2J: J->Erase in Display, 2->Erase all of the display
     ** H-> Cursor Position, take two arguments: row and column number, default to 1
     */
-    write(STDOUT_FILENO, "\x1b[2J", 4); 
-    write(STDOUT_FILENO, "\x1b[H", 3);
+    // write(STDOUT_FILENO, "\x1b[2J", 4); 
+    // write(STDOUT_FILENO, "\x1b[H", 3);
+    abAppend(&ab, "\x1b[2J", 4);
+    abAppend(&ab, "\x1b[H", 3);
 
-    editorDrawRows();
+    editorDrawRows(&ab);
 
-    write(STDOUT_FILENO, "\x1b[H", 3);
+    // write(STDOUT_FILENO, "\x1b[H", 3);
+    abAppend(&ab, "\x1b[H", 3);
+
+    write(STDOUT_FILENO, ab.b, ab.len);
+    abFree(&ab);
 }
 
 /*** input ***/
 
 void editorProcessKeypress() {
-    char c = editiorReadKey();
+    char c = editorReadKey();
 
     switch (c)
     {
@@ -191,6 +264,7 @@ int main() {
     initEditor();
 
     while (1) {
+        editorRefreshScreen();
         editorProcessKeypress();
     }
     return 0;
