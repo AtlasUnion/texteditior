@@ -55,12 +55,6 @@ void abFree(struct abuf* ab) {
     free(ab->b);
 }
 
-/*** append buffer ***/
-
-struct abuf{
-    char* b;
-    int len;
-};
 /*** terminal ***/
 
 /**
