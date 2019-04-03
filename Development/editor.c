@@ -23,6 +23,11 @@ enum editorKey {
 };
 
 /*** data  ***/
+
+/**
+ * @brief Editior Config
+ * Include cursor position, window size and current terminal mode
+ */
 struct editorConfig {
     int cx, cy;
     int screenRows;
@@ -34,6 +39,10 @@ struct editorConfig E;
 
 /*** append buffer ***/
 
+/**
+ * @brief Dynamic String
+ * 
+ */
 struct abuf{
     char* b;
     int len;
@@ -139,7 +148,7 @@ void enableRawMode() {
 /**
  * @brief Read a key press from user
  * 
- * @return char 
+ * @return int
  */
 int editorReadKey() {
     int nread;
@@ -229,6 +238,11 @@ int getWindowSize(int* rows, int* cols) {
 
 /*** output ***/
 
+/**
+ * @brief Draw '~' and welcome message
+ * 
+ * @param ab 
+ */
 void editorDrawRows(struct abuf* ab) {
     int y;
     for (y = 0; y < E.screenRows; y++) {
@@ -264,6 +278,10 @@ void editorDrawRows(struct abuf* ab) {
     }
 }
 
+/**
+ * @brief Refresh the screen -- redraw graphics
+ * 
+ */
 void editorRefreshScreen() {
     struct abuf ab = ABUF_INIT;
 
@@ -298,24 +316,41 @@ void editorRefreshScreen() {
 
 /*** input ***/
 
+/**
+ * @brief Move the cursor
+ * 
+ * @param key: user key press
+ */
 void editorMoveCursor(int key) {
     switch (key)
     {
         case ARROW_LEFT:
-            E.cx--;
+            if (E.cx != 0) {
+                E.cx--;
+            }
             break;
         case ARROW_RIGHT:
-            E.cx++;
+            if (E.cx != E.screenCols - 1) {
+                E.cx++;
+            }
             break;
         case ARROW_UP:
-            E.cy--;
+            if (E.cy != 0) {
+                E.cy--;
+            }
             break;
         case ARROW_DOWN:
-            E.cy++;
+            if (E.cy != E.screenRows - 1) {
+                E.cy++;
+            }
             break;
     }
 }
 
+/**
+ * @brief User key press process
+ * 
+ */
 void editorProcessKeypress() {
     int c = editorReadKey();
 
@@ -337,6 +372,10 @@ void editorProcessKeypress() {
 
 /*** init ***/
 
+/**
+ * @brief Initialize Editor
+ * Get Window Size, set cursor position
+ */
 void initEditor() {
     /*
     ** Set cursor position
