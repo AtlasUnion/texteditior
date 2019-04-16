@@ -1,5 +1,9 @@
 /*** include ***/
 
+#define _DEFAULT_SOURCE // feature test macro
+#define _BSD_SOURCE     // feature test macro
+#define _GNU_SOURCE     // feature test macro
+
 #include <termios.h>
 #include <unistd.h>
 #include <stdio.h>
@@ -7,6 +11,7 @@
 #include <ctype.h>
 #include <errno.h>
 #include <sys/ioctl.h>
+#include <sys/types.h>
 #include <string.h>
 
 /*** defines ***/
@@ -33,10 +38,18 @@ enum editorKey {
  * @brief Editior Config
  * Include cursor position, window size and current terminal mode
  */
+typedef struct erow {
+    int size;
+    char* chars;
+} erow;
+
 struct editorConfig {
     int cx, cy;
+    int rowoff; // TODO: implement support for vertical scrolling
     int screenRows;
     int screenCols;
+    int numrows;
+    erow* row;
     struct termios orig_termios;
 };
 
@@ -263,8 +276,65 @@ int getWindowSize(int* rows, int* cols) {
     }
 }
 
+/** row operation **/
+
+/**
+ * @brief Append a line to the editor's buffer
+ * 
+ * @param s 
+ * @param len 
+ */
+void editorAppendRow(char* s, size_t len) {
+    E.row = realloc(E.row, sizeof(erow)*(E.numrows + 1));
+
+    int at = E.numrows;
+    E.row[at].size = len;
+    E.row[at].chars = malloc(len + 1);
+    memcpy(E.row[at].chars, s, len);
+    E.row[at].chars[len] = '\0';
+    E.numrows++;
+}
+
+/** file i/o **/
+/**
+ * @brief Open a file and read line by line into editor
+ * 
+ * @param filename 
+ */
+void editorOpen(char* filename) {
+    // char* line = "Hello, World!";
+    // ssize_t linelen = 13;
+    FILE* fp = fopen(filename, "r"); // TODO: current only allow read-only operation
+    if (!fp) die("fopen");
+
+    char* line = NULL;
+    size_t linecap = 0;
+    ssize_t linelen;
+    
+    // let the os allocate space for line by using getline, we must then free the space
+    while ((linelen = getline(&line, &linecap, fp)) != -1) {
+        // do not store newline and carriage return char as each of our erow is defined as new line
+        while (linelen > 0 && (line[linelen - 1] == '\n' || line[linelen - 1] == '\r')) linelen--; 
+        editorAppendRow(line, linelen);
+    }
+    free(line);
+    fclose(fp);
+}
 
 /*** output ***/
+
+/**
+ * @brief Check the position of the cursor and update the rowoff accordingly
+ * 
+ */
+void editorScroll() {
+    if (E.cy  < E.rowoff) { // check if the cursor is above visible window
+        E.rowoff = E.cy;
+    }
+    if (E.cy >= E.rowoff + E.screenRows) { // check if the cursor is below the visible window
+        E.rowoff = E.cy - E.screenRows + 1;
+    }
+}
 
 /**
  * @brief Draw '~' and welcome message
@@ -274,32 +344,40 @@ int getWindowSize(int* rows, int* cols) {
 void editorDrawRows(struct abuf* ab) {
     int y;
     for (y = 0; y < E.screenRows; y++) {
-        if (y == E.screenRows/3) {
-            char welcome[80];
-            int welcomelen = snprintf(welcome, sizeof(welcome), "Editor -- version %s", EDITOR_VERSION);
+        int filerow = y + E.rowoff; // calculate correct line/row number
 
-            if (welcomelen > E.screenCols) welcomelen = E.screenCols;
+        if (filerow >= E.numrows) { // draw version number, welcome string and ~
+            if (E.numrows == 0 && y == E.screenRows/3) { // display the welcome message if and only if the user choose not to open a file or type nothing
+                char welcome[80];
+                int welcomelen = snprintf(welcome, sizeof(welcome), "Editor -- version %s", EDITOR_VERSION);
 
-            /*
-            ** Center the welcome string
-            */
-            int padding = (E.screenCols - welcomelen)/2;
-            if (padding) {
+                if (welcomelen > E.screenCols) welcomelen = E.screenCols;
+
+                /*
+                ** Center the welcome string
+                */
+                int padding = (E.screenCols - welcomelen)/2;
+                if (padding) {
+                    abAppend(ab, "~", 1);
+                    padding--;
+                }
+                while(padding--) abAppend(ab, " ", 1);
+                abAppend(ab, welcome, welcomelen);
+            } else {
+                // write(STDOUT_FILENO, "~", 1);
                 abAppend(ab, "~", 1);
-                padding--;
             }
-            while(padding--) abAppend(ab, " ", 1);
-            abAppend(ab, welcome, welcomelen);
-        } else {
-            // write(STDOUT_FILENO, "~", 1);
-            abAppend(ab, "~", 1);
+        } else { // draw out user input text
+            int len = E.row[filerow].size;
+            if (len > E.screenCols) len = E.screenCols;
+            abAppend(ab, E.row[filerow].chars, len);
         }
 
         /*
         ** K -> Erase in line
         */
         abAppend(ab, "\x1b[K", 3);
-        if (y < E.screenRows - 1) {
+        if (y < E.screenRows - 1) { // stop screen scroll for last line as '\r\n' will add a new blank line
             // write(STDOUT_FILENO, "\r\n", 2);
             abAppend(ab, "\r\n", 2);
         }
@@ -311,6 +389,8 @@ void editorDrawRows(struct abuf* ab) {
  * 
  */
 void editorRefreshScreen() {
+    editorScroll();
+
     struct abuf ab = ABUF_INIT;
 
     /*
@@ -321,7 +401,7 @@ void editorRefreshScreen() {
     */
     // write(STDOUT_FILENO, "\x1b[2J", 4); 
     // write(STDOUT_FILENO, "\x1b[H", 3);
-    abAppend(&ab, "\x1b[?25l",6);
+    abAppend(&ab, "\x1b[?25l",6); // hide cursor
     // abAppend(&ab, "\x1b[2J", 4);
     abAppend(&ab, "\x1b[H", 3);
 
@@ -331,12 +411,12 @@ void editorRefreshScreen() {
     ** Move cursor
     */
     char buf[32];
-    snprintf(buf, sizeof(buf), "\x1b[%d;%dH", E.cy + 1, E.cx + 1);
+    snprintf(buf, sizeof(buf), "\x1b[%d;%dH", (E.cy - E.rowoff) + 1, E.cx + 1);
     abAppend(&ab, buf, strlen(buf));
 
     // write(STDOUT_FILENO, "\x1b[H", 3);
     // abAppend(&ab, "\x1b[H", 3);
-    abAppend(&ab, "\x1b[?25h",6);
+    abAppend(&ab, "\x1b[?25h",6); // show cursor
 
     write(STDOUT_FILENO, ab.b, ab.len);
     abFree(&ab);
@@ -368,7 +448,7 @@ void editorMoveCursor(int key) {
             }
             break;
         case ARROW_DOWN:
-            if (E.cy != E.screenRows - 1) {
+            if (E.cy < E.numrows) {
                 E.cy++;
             }
             break;
@@ -426,14 +506,20 @@ void initEditor() {
     */
     E.cx = 0;
     E.cy = 0;
+    E.rowoff = 0;
+    E.numrows = 0;
+    E.row = NULL;
 
     if (getWindowSize(&E.screenRows, &E.screenCols) == -1)
         die("getWindowSize");
 }
 
-int main() {
+int main(int argc, char* argv[]) {
     enableRawMode();
     initEditor();
+    if (argc >= 2) {
+            editorOpen(argv[1]);
+    }
 
     while (1) {
         editorRefreshScreen();
